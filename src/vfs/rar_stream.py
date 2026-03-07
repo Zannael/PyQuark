@@ -8,6 +8,7 @@ import shutil
 import rarfile
 import multivolumefile
 import hashlib
+from collections import OrderedDict
 from src.vfs.core import get_rar_metadata, is_rar_multipart
 
 STAGE_THRESHOLD = 3.5 * 1024 * 1024 * 1024  # 3.5 GiB circa
@@ -239,14 +240,36 @@ class RarVirtualHandle:
             time.sleep(0.1)
 
 
-# --- MANAGER DEI FILE APERTI (Invariato nella logica, usa la nuova classe) ---
+# --- MANAGER DEI FILE APERTI ---
 
-_OPEN_HANDLES = {}
-_CURRENT_ACTIVE_PATH = None
+# Maximum number of concurrently open RAR handles.
+# When the limit is reached _evict_one_handle() removes the oldest stream-mode
+# entry (stage-mode entries are cheap to re-open because their disk cache stays
+# intact even after eviction).
+MAX_OPEN_HANDLES = 4
+
+_OPEN_HANDLES: OrderedDict = OrderedDict()
+
+
+def _evict_one_handle():
+    """Close and remove the oldest stream-mode handle; fall back to stage-mode."""
+    for path, handle in list(_OPEN_HANDLES.items()):
+        if handle.mode == "stream":
+            print(f"🔄 [VFS] Eviction stream handle: {handle.internal_path}")
+            try:
+                handle.close()
+            except Exception:
+                pass
+            del _OPEN_HANDLES[path]
+            return
+    # No stream-mode handle found: evict the oldest stage-mode entry.
+    # Its temp dir (disk cache) is intentionally left intact.
+    if _OPEN_HANDLES:
+        path, handle = next(iter(_OPEN_HANDLES.items()))
+        print(f"🔄 [VFS] Eviction stage handle (cache sul disco preservata): {handle.internal_path}")
+        del _OPEN_HANDLES[path]
 
 def vfs_start_file(virtual_path, phys_path, internal_path):
-    global _CURRENT_ACTIVE_PATH
-
     if virtual_path in _OPEN_HANDLES:
         handle = _OPEN_HANDLES[virtual_path]
 
@@ -259,8 +282,13 @@ def vfs_start_file(virtual_path, phys_path, internal_path):
             del _OPEN_HANDLES[virtual_path]
         else:
             print(f"⚡ [VFS] Smart Cache HIT: riutilizzo l'estrazione per {internal_path}")
-            _CURRENT_ACTIVE_PATH = virtual_path
+            # Move to end so it is considered the most-recently-used entry.
+            _OPEN_HANDLES.move_to_end(virtual_path)
             return
+
+    # Evict if we are at capacity.
+    if len(_OPEN_HANDLES) >= MAX_OPEN_HANDLES:
+        _evict_one_handle()
 
     metadata = get_rar_metadata(phys_path)
     file_size = metadata['sizes'].get(internal_path, 0)
@@ -278,7 +306,6 @@ def vfs_start_file(virtual_path, phys_path, internal_path):
     )
     handle.open()
     _OPEN_HANDLES[virtual_path] = handle
-    _CURRENT_ACTIVE_PATH = virtual_path
 
     print(f"📦 [VFS] Handle creato in modalità {mode} per {internal_path}")
 
