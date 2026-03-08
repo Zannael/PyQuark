@@ -16,12 +16,17 @@ CACHE_ROOT = os.path.join(tempfile.gettempdir(), "pyquark_stage_cache")
 
 
 class RarVirtualHandle:
-    def __init__(self, rar_path, internal_path, mode="stream", cache_root=None):
+    def __init__(self, rar_path, internal_path, mode="stream", cache_root=None,
+                 force_delete_on_close=False):
         self.rar_path = rar_path
         self.internal_path = internal_path
         self.mode = mode
         self.cache_root = cache_root or CACHE_ROOT
         self.is_open = False
+        # When True, close() will delete temp_dir even for stage-mode handles.
+        # Used for XCI files staged from RAR archives to avoid leaving multi-GB
+        # temp files on disk after the session ends.
+        self.force_delete_on_close = force_delete_on_close
 
         self._extract_thread = None
         self._extract_proc = None
@@ -211,11 +216,14 @@ class RarVirtualHandle:
 
         self.is_open = False
 
-        if self.mode == "stream":
+        # Unconditional cleanup for handles that must not persist on disk
+        # (e.g. staged XCI files from RAR archives, which can be multi-GB).
+        if self.force_delete_on_close or self.mode == "stream":
             try:
                 if os.path.exists(self.temp_dir):
                     shutil.rmtree(self.temp_dir)
-                    print(f"🗑️ [VFS] Cache stream pulita: {self.temp_dir}")
+                    label = "XCI staged" if self.force_delete_on_close else "stream"
+                    print(f"🗑️ [VFS] Cache {label} pulita: {self.temp_dir}")
             except Exception as e:
                 print(f"⚠️ [VFS] Errore durante la pulizia: {e}")
 
@@ -298,11 +306,21 @@ def vfs_start_file(virtual_path, phys_path, internal_path):
     if multipart or file_size > STAGE_THRESHOLD:
         mode = "stage"
 
+    # XCI files require random-access reads (XCIMapper seeks into arbitrary
+    # offsets). Streaming is therefore never safe for them; force stage mode
+    # regardless of file size or multipart status.
+    is_xci = internal_path.lower().endswith('.xci')
+    if is_xci:
+        mode = "stage"
+
     handle = RarVirtualHandle(
         phys_path,
         internal_path,
         mode=mode,
-        cache_root=CACHE_ROOT
+        cache_root=CACHE_ROOT,
+        # XCI staged files are potentially multi-GB; delete on close rather
+        # than persisting in the shared cache directory.
+        force_delete_on_close=is_xci,
     )
     handle.open()
     _OPEN_HANDLES[virtual_path] = handle
@@ -318,6 +336,15 @@ def vfs_end_file(virtual_path):
     # TRUCCO MAGICO: Ignoriamo la richiesta di chiusura di Goldleaf!
     # Il file continuerà a estrarsi in background e resterà pronto sul disco.
     pass
+
+def vfs_get_handle(virtual_path):
+    """Return the open RarVirtualHandle for *virtual_path*, or None."""
+    return _OPEN_HANDLES.get(virtual_path)
+
+def vfs_get_staged_path(virtual_path):
+    """Return the absolute temp_filepath for *virtual_path*, or None."""
+    handle = _OPEN_HANDLES.get(virtual_path)
+    return handle.temp_filepath if handle is not None else None
 
 # Sistema di sicurezza: puliamo la cartella temporanea quando spegniamo il server (Ctrl+C)
 def cleanup_all():

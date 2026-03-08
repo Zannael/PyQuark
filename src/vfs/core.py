@@ -111,7 +111,14 @@ def vfs_get_files(path):
     elif path_type == 'RAR_AS_DIR':
         # Goldleaf è "entrato" nel RAR, mostriamo il contenuto virtuale
         metadata = get_rar_metadata(phys_path)
-        return sorted(metadata['files'])
+        files = []
+        for f in metadata['files']:
+            # INIEZIONE XCI: Camuffiamo il file anche dentro i RAR
+            if f.lower().endswith('.xci'):
+                files.append(f + '.nsp')
+            else:
+                files.append(f)
+        return sorted(files)
 
     return []
 

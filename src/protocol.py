@@ -2,7 +2,10 @@ import usb.core
 import struct
 import os
 from src.vfs.core import vfs_get_dirs, vfs_get_files, vfs_stat, parse_virtual_path
-from src.vfs.rar_stream import vfs_start_file, vfs_read_file, vfs_end_file
+from src.vfs.rar_stream import (
+    vfs_start_file, vfs_read_file, vfs_end_file,
+    vfs_get_handle, vfs_get_staged_path,
+)
 from src.xci_virtualizer import XCIMapper, VirtualNSPBuilder
 from src.session import SessionState
 
@@ -238,7 +241,61 @@ def _handle_stat_path(data, resp, dev, ep_out, base_folder, session):
         file_size = builder.total_virtual_size
         path_type = PATH_TYPE_FILE  # Assicuriamoci che venga visto come file
     elif path.lower().endswith('.xci') and p_type == 'VIRTUAL_FILE':
-        print(f"⚠️ Salto XCI in RAR: {os.path.basename(path)} (Non ancora supportato)")
+        # XCI inside a RAR: kick off (or reuse) background staging, then build
+        # the virtual NSP map as soon as the HFS0 header is readable.
+        if session.active_xci_key != path:
+            print(f"🪄 [VFS+XCI] Avvio staging per XCI nel RAR: {os.path.basename(path)} ...")
+            vfs_start_file(path, phys_path, internal_path)  # vfs_start_file forces stage mode
+            handle = vfs_get_handle(path)
+            if handle is None:
+                print("❌ [VFS+XCI] Impossibile ottenere handle VFS, rispondo con dimensione 0")
+                path_type = PATH_TYPE_FILE
+                file_size = 0
+            else:
+                ready = handle.wait_for_size(512 * 1024, timeout=60.0)
+                if not ready:
+                    print("❌ [VFS+XCI] Timeout attesa header XCI, rispondo con dimensione 0")
+                    path_type = PATH_TYPE_FILE
+                    file_size = 0
+                else:
+                    staged_path = vfs_get_staged_path(path)
+                    print(f"🗺️ [VFS+XCI] Attesa dinamica estrazione partizione secure per: {staged_path}")
+
+                    mapper = None
+                    import time
+
+                    # Loop di retry: diamo tempo a unrar di arrivare all'offset giusto (max ~60 secondi)
+                    for _ in range(120):
+                        if handle._error_event.is_set():
+                            print("❌ [VFS+XCI] L'estrazione in background è fallita.")
+                            break
+
+                        try:
+                            # Proviamo a parsare. Se i dati non ci sono ancora, struct.unpack lancerà un errore
+                            mapper = XCIMapper(staged_path)
+                            break  # Se non ci sono eccezioni, abbiamo i dati! Usciamo dal loop.
+                        except struct.error:
+                            # L'errore 'requires a buffer of X bytes' viene intercettato qui.
+                            # Dormiamo mezzo secondo e lasciamo lavorare unrar.
+                            time.sleep(0.5)
+
+                    if mapper is None:
+                        print("❌ [VFS+XCI] Timeout: partizione secure non raggiunta in tempo.")
+                        path_type = PATH_TYPE_FILE
+                        file_size = 0
+                    else:
+                        print("✅ [VFS+XCI] Partizione secure mappata con successo!")
+                        builder = VirtualNSPBuilder(mapper.secure_files)
+                        session.active_xci_virtualizer = builder
+                        session.active_xci_phys_path = staged_path
+                        session.active_xci_staged_path = staged_path
+                        session.active_xci_key = path
+                        file_size = builder.total_virtual_size
+                        path_type = PATH_TYPE_FILE
+        else:
+            print(f"⚡ [VFS+XCI] StatPath cache HIT per {os.path.basename(path)}")
+            file_size  = session.active_xci_virtualizer.total_virtual_size
+            path_type  = PATH_TYPE_FILE
 
     print(f"🔍 CMD: StatPath({os.path.basename(path)}) -> Tipo: {path_type}, Size: {file_size}")
     resp.response_start()
@@ -256,8 +313,10 @@ def _handle_read_file(data, resp, dev, ep_out, base_folder, session):
     p_type, phys_path, internal_path = parse_virtual_path(path)
     read_data = b''
 
-    # INIEZIONE XCI: Flusso di lettura ibrido (RAM + Disco) SOLO su disco fisico
-    if path.lower().endswith('.xci') and p_type == 'PHYSICAL_FILE' and session.active_xci_virtualizer:
+    # INIEZIONE XCI: Flusso di lettura ibrido (RAM + Disco) per XCI fisico o staged da RAR.
+    # session.active_xci_phys_path holds the correct path in both cases (physical file or
+    # staged temp_filepath), so read_virtual_xci() works identically for both.
+    if path.lower().endswith('.xci') and p_type in ('PHYSICAL_FILE', 'VIRTUAL_FILE') and session.active_xci_virtualizer:
         read_data = read_virtual_xci(session.active_xci_virtualizer, session.active_xci_phys_path, offset, size)
 
     elif p_type == 'PHYSICAL_FILE':
@@ -308,16 +367,40 @@ def _handle_start_file(data, resp, dev, ep_out, base_folder, session):
             mapper = XCIMapper(phys_path)
             session.active_xci_virtualizer = VirtualNSPBuilder(mapper.secure_files)
             session.active_xci_phys_path = phys_path
+            session.active_xci_staged_path = None
             session.active_xci_key = phys_path
+        session.active_virtual_path = None
+    elif path.lower().endswith('.xci') and p_type == 'VIRTUAL_FILE':
+        # Staging was already started (and XCIMapper already run) by CMD_STAT_PATH.
+        # Reuse the cached session state; do not re-start extraction.
+        if session.active_xci_key == path and session.active_xci_virtualizer is not None:
+            print(f"⚡ [VFS+XCI] StartFile cache HIT: builder pronto per {os.path.basename(path)}")
+        else:
+            # Edge case: StartFile arrived without a preceding CMD_STAT_PATH.
+            print(f"🪄 [VFS+XCI] StartFile senza StatPath precedente, avvio staging...")
+            vfs_start_file(path, phys_path, internal_path)
+            handle = vfs_get_handle(path)
+            if handle is not None:
+                ready = handle.wait_for_size(512 * 1024, timeout=60.0)
+                if ready:
+                    staged_path = vfs_get_staged_path(path)
+                    mapper = XCIMapper(staged_path)
+                    builder = VirtualNSPBuilder(mapper.secure_files)
+                    session.active_xci_virtualizer  = builder
+                    session.active_xci_phys_path    = staged_path
+                    session.active_xci_staged_path  = staged_path
+                    session.active_xci_key          = path
         session.active_virtual_path = None
     elif p_type == 'VIRTUAL_FILE':
         vfs_start_file(path, phys_path, internal_path)
         session.active_virtual_path = path
         session.active_xci_virtualizer = None
+        session.active_xci_staged_path = None
         session.active_xci_key = None
     else:
         session.active_virtual_path = None
         session.active_xci_virtualizer = None
+        session.active_xci_staged_path = None
         session.active_xci_key = None
 
     resp.response_start()

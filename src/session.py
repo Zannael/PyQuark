@@ -12,13 +12,20 @@ active_xci_virtualizer : VirtualNSPBuilder | None
     Set on CMD_START_FILE (XCI branch) or cached from CMD_STAT_PATH.
 
 active_xci_phys_path : str | None
-    Absolute physical path of the .xci file that active_xci_virtualizer was
-    built from.  Used by read_virtual_xci() to open the real file for NCA data.
+    Absolute path to the .xci file used by read_virtual_xci() to read NCA
+    data.  For a physical XCI this is the on-disk path; for an XCI inside a
+    RAR this is the temp_filepath of the RarVirtualHandle (i.e. the staged
+    extraction path).
+
+active_xci_staged_path : str | None
+    Absolute path to the staged temporary file when an XCI was extracted
+    from inside a RAR archive.  Mirrors active_xci_phys_path in that case.
+    None when serving a physical XCI directly.
 
 active_xci_key : str | None
-    Physical path of the XCI for which active_xci_virtualizer was most recently
-    built.  Allows CMD_STAT_PATH to cache the VirtualNSPBuilder so that the
-    immediately-following CMD_START_FILE can reuse it instead of rebuilding.
+    Virtual path key (Goldleaf-visible) for which active_xci_virtualizer was
+    most recently built.  Allows CMD_STAT_PATH to cache the VirtualNSPBuilder
+    so that the immediately-following CMD_START_FILE can reuse it.
 
 active_virtual_path : str | None
     The virtual path (i.e. the path as seen by Goldleaf) of the RAR-backed
@@ -36,5 +43,6 @@ from typing import Optional
 class SessionState:
     active_xci_virtualizer: Optional[object] = field(default=None)
     active_xci_phys_path: Optional[str] = field(default=None)
+    active_xci_staged_path: Optional[str] = field(default=None)
     active_xci_key: Optional[str] = field(default=None)
     active_virtual_path: Optional[str] = field(default=None)
