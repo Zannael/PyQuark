@@ -160,6 +160,9 @@ class RarVirtualHandle:
             self.open()
 
         if self.mode == "stage":
+            start_wait = time.time()
+            last_log = start_wait
+
             while True:
                 if self._error_event.is_set():
                     return b''
@@ -167,6 +170,15 @@ class RarVirtualHandle:
                     break
                 if self._stop_event.is_set():
                     return b''
+
+                # --- NUOVO LOG DI FEEDBACK ---
+                now = time.time()
+                if now - last_log >= 5.0:  # Stampa ogni 5 secondi
+                    print(
+                        f"⏳ [VFS] Extraction for {self.internal_path}, wait... ({(now - start_wait):.0f}s)")
+                    last_log = now
+                # -----------------------------
+
                 time.sleep(0.1)
 
             try:
@@ -229,6 +241,8 @@ class RarVirtualHandle:
 
     def wait_for_size(self, target_size, timeout=15.0):
         start_time = time.time()
+        last_log = start_time
+
         while True:
             if self._error_event.is_set():
                 return False
@@ -244,6 +258,14 @@ class RarVirtualHandle:
             if time.time() - start_time > timeout:
                 print(f"⚠️ [VFS] Timeout waiting buffer ({target_size} byte) for {self.internal_path}")
                 return False
+
+            # --- NUOVO LOG DI FEEDBACK ---
+            now = time.time()
+            if now - last_log >= 5.0:
+                print(
+                    f"⏳ [VFS] Header reading processing {self.internal_path}... ({(now - start_time):.0f}s)")
+                last_log = now
+            # -----------------------------
 
             time.sleep(0.1)
 
