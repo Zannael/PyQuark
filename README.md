@@ -122,6 +122,7 @@ This project was developed and tested in the following environment:
 * **Goldleaf:** 1.20
 
 I will run other tests to maximize system compatibility.
+Like any other software, the speed of operations depends on the hardware of the device being used (as well as the USB transfer speed) and the size of the file you are installing. For this reason, on older or low-power devices, operations related to the on-the-fly extraction of data from archives may be very slow. While waiting for data to be sent, the Goldleaf interface freezes, leaving no possibility for interaction. As long as you don't see an error in the terminal, everything is normal; it will unlock sooner or later (I hope! 🤣).
 
 ### **Note for Windows Users**
 
