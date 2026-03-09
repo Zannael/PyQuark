@@ -68,7 +68,7 @@ class RarVirtualHandle:
         self._extract_thread = threading.Thread(target=target, daemon=True)
         self._extract_thread.start()
 
-        print(f"🔄 [VFS] Apertura {self.mode} avviata per: {self.internal_path}")
+        print(f"🔄 [VFS] Opening with {self.mode} started for: {self.internal_path}")
 
     def _stage_worker(self):
         try:
@@ -104,22 +104,22 @@ class RarVirtualHandle:
                 raise RuntimeError(f"unrar failed rc={rc}: {stderr}")
 
             if not os.path.exists(self.temp_filepath):
-                raise RuntimeError("File staged non trovato dopo unrar")
+                raise RuntimeError("File staged not found after unrar")
 
             with open(self.complete_marker, "w", encoding="utf-8") as f:
                 f.write("ok")
 
             self._extraction_complete.set()
-            print(f"✅ [VFS] Stage completato: {self.internal_path}")
+            print(f"✅ [VFS] Stage finished: {self.internal_path}")
 
         except Exception as e:
-            print(f"❌ [VFS] Errore stage: {e}")
+            print(f"❌ [VFS] Stage error: {e}")
             self._error_event.set()
         finally:
             self._extract_proc = None
 
     def _extract_worker(self):
-        """Funzione eseguita dal thread: estrae il file a blocchi."""
+        """Thread executed function to extract file in blocks."""
         try:
             os.makedirs(os.path.dirname(self.temp_filepath), exist_ok=True)
 
@@ -144,10 +144,10 @@ class RarVirtualHandle:
 
             if not self._stop_event.is_set():
                 self._extraction_complete.set()
-                print(f"✅ [VFS] Estrazione completata: {self.internal_path}")
+                print(f"✅ [VFS] Extraction completed: {self.internal_path}")
 
         except Exception as e:
-            print(f"❌ [VFS] Errore critico durante l'estrazione: {e}")
+            print(f"❌ [VFS] Error during extraction: {e}")
             self._error_event.set()
         finally:
             if 'rf' in locals() and hasattr(rf, 'close'):
@@ -174,14 +174,14 @@ class RarVirtualHandle:
                     f.seek(offset)
                     return f.read(size)
             except Exception as e:
-                print(f"⚠️ [VFS] Errore lettura file staged: {e}")
+                print(f"⚠️ [VFS] Error while reading staged file: {e}")
                 return b''
 
         target_size = offset + size
 
         while True:
             if self._error_event.is_set():
-                print("⚠️ [VFS] Impossibile leggere: estrazione in errore.")
+                print("⚠️ [VFS] Impossible to read: extraction error.")
                 return b''
 
             current_size = os.path.getsize(self.temp_filepath) if os.path.exists(self.temp_filepath) else 0
@@ -199,7 +199,7 @@ class RarVirtualHandle:
                 f.seek(offset)
                 return f.read(size)
         except Exception as e:
-            print(f"⚠️ [VFS] Errore lettura file temporaneo: {e}")
+            print(f"⚠️ [VFS] Error while reading temporary file: {e}")
             return b''
 
     def close(self):
@@ -223,9 +223,9 @@ class RarVirtualHandle:
                 if os.path.exists(self.temp_dir):
                     shutil.rmtree(self.temp_dir)
                     label = "XCI staged" if self.force_delete_on_close else "stream"
-                    print(f"🗑️ [VFS] Cache {label} pulita: {self.temp_dir}")
+                    print(f"🗑️ [VFS] Cache {label} cleaned: {self.temp_dir}")
             except Exception as e:
-                print(f"⚠️ [VFS] Errore durante la pulizia: {e}")
+                print(f"⚠️ [VFS] Errore while cleaning: {e}")
 
     def wait_for_size(self, target_size, timeout=15.0):
         start_time = time.time()
@@ -242,13 +242,11 @@ class RarVirtualHandle:
                 return False
 
             if time.time() - start_time > timeout:
-                print(f"⚠️ [VFS] Timeout attesa buffer ({target_size} byte) per {self.internal_path}")
+                print(f"⚠️ [VFS] Timeout waiting buffer ({target_size} byte) for {self.internal_path}")
                 return False
 
             time.sleep(0.1)
 
-
-# --- MANAGER DEI FILE APERTI ---
 
 # Maximum number of concurrently open RAR handles.
 # When the limit is reached _evict_one_handle() removes the oldest stream-mode
@@ -274,7 +272,7 @@ def _evict_one_handle():
     # Its temp dir (disk cache) is intentionally left intact.
     if _OPEN_HANDLES:
         path, handle = next(iter(_OPEN_HANDLES.items()))
-        print(f"🔄 [VFS] Eviction stage handle (cache sul disco preservata): {handle.internal_path}")
+        print(f"🔄 [VFS] Eviction stage handle (disk-cache preserved): {handle.internal_path}")
         del _OPEN_HANDLES[path]
 
 def vfs_start_file(virtual_path, phys_path, internal_path):
@@ -282,14 +280,14 @@ def vfs_start_file(virtual_path, phys_path, internal_path):
         handle = _OPEN_HANDLES[virtual_path]
 
         if handle._error_event.is_set():
-            print(f"♻️ [VFS] Handle in errore, ricreazione per {internal_path}")
+            print(f"♻️ [VFS] Error handle, re-create for {internal_path}")
             try:
                 handle.close()
             except Exception:
                 pass
             del _OPEN_HANDLES[virtual_path]
         else:
-            print(f"⚡ [VFS] Smart Cache HIT: riutilizzo l'estrazione per {internal_path}")
+            print(f"⚡ [VFS] Smart Cache HIT: extraction reuse for {internal_path}")
             # Move to end so it is considered the most-recently-used entry.
             _OPEN_HANDLES.move_to_end(virtual_path)
             return
@@ -333,8 +331,6 @@ def vfs_read_file(virtual_path, offset, size):
     return b''
 
 def vfs_end_file(virtual_path):
-    # TRUCCO MAGICO: Ignoriamo la richiesta di chiusura di Goldleaf!
-    # Il file continuerà a estrarsi in background e resterà pronto sul disco.
     pass
 
 def vfs_get_handle(virtual_path):
@@ -346,9 +342,8 @@ def vfs_get_staged_path(virtual_path):
     handle = _OPEN_HANDLES.get(virtual_path)
     return handle.temp_filepath if handle is not None else None
 
-# Sistema di sicurezza: puliamo la cartella temporanea quando spegniamo il server (Ctrl+C)
 def cleanup_all():
-    print("\n🛑 [VFS] Spegnimento server: pulizia cache in corso...")
+    print("\n🛑 [VFS] Serve shutting off: cache clean...")
     for path, handle in list(_OPEN_HANDLES.items()):
         handle.close()
 

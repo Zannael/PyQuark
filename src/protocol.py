@@ -62,10 +62,9 @@ class CommandBlockBuilder:
 
 # --- FUNZIONI UTILI ---
 def read_string(data, offset):
-    """Legge una stringa dal pacchetto Goldleaf"""
+    """Reads a string from Goldleaf packet"""
     str_len = struct.unpack_from('<I', data, offset)[0]
     raw_bytes = bytes(data[offset+4 : offset+4+str_len])
-    # Aggiungiamo .rstrip('\x00') per pulire eventuali byte nulli finali
     val = raw_bytes.decode('utf-8').rstrip('\x00')
     return val, offset + 4 + str_len
 
@@ -77,16 +76,15 @@ def get_files(path):
 
 
 def clean_path(raw_path):
-    """Pulisce le stranezze di formattazione che Goldleaf aggiunge ai percorsi"""
-    # 1. Rimuove il ':/' finale usato per i finti mount point
+    """Cleans some weird things added from Goldeaf to the paths"""
+    # 1. Removes ending ':/' used for mount points
     cleaned = raw_path.replace(':/', '/')
-    # 2. Rimuove eventuali doppi slash '//'
+    # 2. Removes double slashes '//'
     cleaned = cleaned.replace('//', '/')
-    # 3. Chiede al sistema operativo di normalizzare il percorso finale
+    # 3. Ask the OS to normalize the path
     cleaned = os.path.normpath(cleaned)
 
-    # 4. INIEZIONE XCI: Togliamo la maschera. Se Goldleaf chiede un .xci.nsp,
-    # noi lavoreremo internamente con il vero .xci
+    # 4. XCI injection: we work with the real ".xci" file by removing the ".nsp" mask
     if cleaned.lower().endswith('.xci.nsp'):
         cleaned = cleaned[:-4]  # Rimuove esattamente la stringa ".nsp"
 
@@ -114,14 +112,14 @@ def read_virtual_xci(virtualizer, phys_path, offset, size):
     bytes_left = size
     current_offset = offset
 
-    # 1. LETTURA DALLA RAM (Finto Header PFS0)
+    # 1. RAM READING (Mock Header PFS0)
     if current_offset < header_size:
         read_len = min(bytes_left, header_size - current_offset)
         result += virtualizer.header_bytes[current_offset: current_offset + read_len]
         current_offset += read_len
         bytes_left -= read_len
 
-    # 2. LETTURA DAL DISCO (File XCI fisico)
+    # 2. DISK READING (Physical XCI)
     if bytes_left > 0:
         try:
             with open(phys_path, 'rb') as xci_file:
@@ -142,7 +140,7 @@ def read_virtual_xci(virtualizer, phys_path, offset, size):
                         if bytes_left <= 0:
                             break
         except Exception as e:
-            print(f"⚠️ Errore durante la lettura ibrida dell'XCI: {e}")
+            print(f"⚠️ Error during hybrid read of XCI: {e}")
 
     return bytes(result)
 
@@ -221,70 +219,66 @@ def _handle_stat_path(data, resp, dev, ep_out, base_folder, session):
     raw_path, _ = read_string(data, 8)
     path = clean_path(raw_path)
 
-    # Preleviamo il p_type PRIMA della magia
     p_type, phys_path, internal_path = parse_virtual_path(path)
     path_type, file_size = vfs_stat(path)
 
-    # INIEZIONE XCI: Calcoliamo la dimensione virtuale al volo SOLO per file fisici
+    # XCI injection: virtual dimension check only for phhysical files
     if path.lower().endswith('.xci') and p_type == 'PHYSICAL_FILE':
         # Cache the builder: CMD_START_FILE will reuse it if the key matches.
         if session.active_xci_key != phys_path:
-            print(f"🪄 Generazione header virtuale per {os.path.basename(path)}...")
+            print(f"🪄 Virtual header generation for {os.path.basename(path)}...")
             mapper = XCIMapper(phys_path)
             builder = VirtualNSPBuilder(mapper.secure_files)
             session.active_xci_virtualizer = builder
             session.active_xci_phys_path = phys_path
             session.active_xci_key = phys_path
         else:
-            print(f"⚡ [XCI] Cache HIT: riutilizzo builder per {os.path.basename(path)}")
+            print(f"⚡ [XCI] Cache HIT: builder reuse for {os.path.basename(path)}")
             builder = session.active_xci_virtualizer
         file_size = builder.total_virtual_size
-        path_type = PATH_TYPE_FILE  # Assicuriamoci che venga visto come file
+        path_type = PATH_TYPE_FILE
     elif path.lower().endswith('.xci') and p_type == 'VIRTUAL_FILE':
         # XCI inside a RAR: kick off (or reuse) background staging, then build
         # the virtual NSP map as soon as the HFS0 header is readable.
         if session.active_xci_key != path:
-            print(f"🪄 [VFS+XCI] Avvio staging per XCI nel RAR: {os.path.basename(path)} ...")
+            print(f"🪄 [VFS+XCI] Running stagin for XCI in RAR: {os.path.basename(path)} ...")
             vfs_start_file(path, phys_path, internal_path)  # vfs_start_file forces stage mode
             handle = vfs_get_handle(path)
             if handle is None:
-                print("❌ [VFS+XCI] Impossibile ottenere handle VFS, rispondo con dimensione 0")
+                print("❌ [VFS+XCI] Impossible obtaining handle VFS, responding with dimension 0")
                 path_type = PATH_TYPE_FILE
                 file_size = 0
             else:
                 ready = handle.wait_for_size(512 * 1024, timeout=60.0)
                 if not ready:
-                    print("❌ [VFS+XCI] Timeout attesa header XCI, rispondo con dimensione 0")
+                    print("❌ [VFS+XCI] Timeout reached for XCI header, responding with dimension 0")
                     path_type = PATH_TYPE_FILE
                     file_size = 0
                 else:
                     staged_path = vfs_get_staged_path(path)
-                    print(f"🗺️ [VFS+XCI] Attesa dinamica estrazione partizione secure per: {staged_path}")
+                    print(f"🗺️ [VFS+XCI] Waiting secure partition extraction for: {staged_path}")
 
                     mapper = None
                     import time
 
-                    # Loop di retry: diamo tempo a unrar di arrivare all'offset giusto (max ~60 secondi)
+                    # Retry loop to make unrar arive at right offset
                     for _ in range(120):
                         if handle._error_event.is_set():
-                            print("❌ [VFS+XCI] L'estrazione in background è fallita.")
+                            print("❌ [VFS+XCI] Failed background extraction.")
                             break
-
                         try:
-                            # Proviamo a parsare. Se i dati non ci sono ancora, struct.unpack lancerà un errore
                             mapper = XCIMapper(staged_path)
-                            break  # Se non ci sono eccezioni, abbiamo i dati! Usciamo dal loop.
+                            break
                         except struct.error:
-                            # L'errore 'requires a buffer of X bytes' viene intercettato qui.
-                            # Dormiamo mezzo secondo e lasciamo lavorare unrar.
+                            # Sleep while unrar is doing the work.
                             time.sleep(0.5)
 
                     if mapper is None:
-                        print("❌ [VFS+XCI] Timeout: partizione secure non raggiunta in tempo.")
+                        print("❌ [VFS+XCI] Timeout: secure partition not reached in time.")
                         path_type = PATH_TYPE_FILE
                         file_size = 0
                     else:
-                        print("✅ [VFS+XCI] Partizione secure mappata con successo!")
+                        print("✅ [VFS+XCI] Secure partition mapped successfully!")
                         builder = VirtualNSPBuilder(mapper.secure_files)
                         session.active_xci_virtualizer = builder
                         session.active_xci_phys_path = staged_path
@@ -293,11 +287,11 @@ def _handle_stat_path(data, resp, dev, ep_out, base_folder, session):
                         file_size = builder.total_virtual_size
                         path_type = PATH_TYPE_FILE
         else:
-            print(f"⚡ [VFS+XCI] StatPath cache HIT per {os.path.basename(path)}")
+            print(f"⚡ [VFS+XCI] StatPath cache HIT for {os.path.basename(path)}")
             file_size  = session.active_xci_virtualizer.total_virtual_size
             path_type  = PATH_TYPE_FILE
 
-    print(f"🔍 CMD: StatPath({os.path.basename(path)}) -> Tipo: {path_type}, Size: {file_size}")
+    print(f"🔍 CMD: StatPath({os.path.basename(path)}) -> Type: {path_type}, Size: {file_size}")
     resp.response_start()
     resp.write32(path_type)
     resp.write64(file_size)
@@ -313,7 +307,6 @@ def _handle_read_file(data, resp, dev, ep_out, base_folder, session):
     p_type, phys_path, internal_path = parse_virtual_path(path)
     read_data = b''
 
-    # INIEZIONE XCI: Flusso di lettura ibrido (RAM + Disco) per XCI fisico o staged da RAR.
     # session.active_xci_phys_path holds the correct path in both cases (physical file or
     # staged temp_filepath), so read_virtual_xci() works identically for both.
     if path.lower().endswith('.xci') and p_type in ('PHYSICAL_FILE', 'VIRTUAL_FILE') and session.active_xci_virtualizer:
@@ -328,7 +321,6 @@ def _handle_read_file(data, resp, dev, ep_out, base_folder, session):
             print(f"⚠️ Errore file fisico: {e}")
 
     elif p_type == 'VIRTUAL_FILE':
-        # FIX: Goldleaf sta sbirciando l'header senza chiamare StartFile!
         if session.active_virtual_path != path:
             print("⚡ Apertura VFS automatica (StartFile saltato da Goldleaf)...")
             vfs_start_file(path, phys_path, internal_path)
@@ -336,16 +328,15 @@ def _handle_read_file(data, resp, dev, ep_out, base_folder, session):
 
         read_data = vfs_read_file(path, offset, size)
 
-        # Controllo di sicurezza
         if len(read_data) == 0:
             print("⚠️ [VFS] Letti 0 byte! Controlla di avere 'unrar' installato sul sistema.")
 
-    # FASE 1: Inviamo l'header con la dimensione effettiva letta
+    # FASE 1: Sending the header with the read dimension
     resp.response_start()
     resp.write64(len(read_data))
     dev.write(ep_out.bEndpointAddress, resp.get_block())
 
-    # FASE 2: Inviamo i RAW DATA direttamente sul bus USB
+    # FASE 2: Sendig RAW DATA on USB bus
     if len(read_data) > 0:
         dev.write(ep_out.bEndpointAddress, read_data)
 
@@ -358,11 +349,11 @@ def _handle_start_file(data, resp, dev, ep_out, base_folder, session):
 
     p_type, phys_path, internal_path = parse_virtual_path(path)
 
-    # INIEZIONE XCI: Inizializziamo il virtualizzatore in RAM SOLO per file fisici
+    # Initializer virtualizer in RAM only for physical files
     if path.lower().endswith('.xci') and p_type == 'PHYSICAL_FILE':
         # Reuse the builder cached by CMD_STAT_PATH when available.
         if session.active_xci_key == phys_path and session.active_xci_virtualizer is not None:
-            print(f"⚡ [XCI] StartFile cache HIT: riutilizzo builder per {os.path.basename(path)}")
+            print(f"⚡ [XCI] StartFile cache HIT: reusing builder for {os.path.basename(path)}")
         else:
             mapper = XCIMapper(phys_path)
             session.active_xci_virtualizer = VirtualNSPBuilder(mapper.secure_files)
@@ -374,10 +365,10 @@ def _handle_start_file(data, resp, dev, ep_out, base_folder, session):
         # Staging was already started (and XCIMapper already run) by CMD_STAT_PATH.
         # Reuse the cached session state; do not re-start extraction.
         if session.active_xci_key == path and session.active_xci_virtualizer is not None:
-            print(f"⚡ [VFS+XCI] StartFile cache HIT: builder pronto per {os.path.basename(path)}")
+            print(f"⚡ [VFS+XCI] StartFile cache HIT: builder ready for {os.path.basename(path)}")
         else:
             # Edge case: StartFile arrived without a preceding CMD_STAT_PATH.
-            print(f"🪄 [VFS+XCI] StartFile senza StatPath precedente, avvio staging...")
+            print(f"🪄 [VFS+XCI] StartFile without previous StatPath, running staging...")
             vfs_start_file(path, phys_path, internal_path)
             handle = vfs_get_handle(path)
             if handle is not None:
@@ -411,7 +402,6 @@ def _handle_end_file(data, resp, dev, ep_out, base_folder, session):
     mode = struct.unpack_from('<I', data, 8)[0]  # noqa: F841 – sent by Goldleaf, not used server-side
     print("⏹️ CMD: EndFile")
 
-    # Chiudiamo il flusso se stavamo leggendo un RAR
     if session.active_virtual_path:
         vfs_end_file(session.active_virtual_path)
 
@@ -424,7 +414,6 @@ def _handle_delete(data, resp, dev, ep_out, base_folder, session):
     path = clean_path(raw_path)
     print(f"🗑️ CMD: Delete({os.path.basename(path)})")
 
-    # Cancelliamo SOLO se è un file fisico, ignoriamo i file nei RAR
     p_type, phys_path, _ = parse_virtual_path(path)
     if p_type in ('PHYSICAL_FILE', 'PHYSICAL_DIR'):
         try:
@@ -433,7 +422,7 @@ def _handle_delete(data, resp, dev, ep_out, base_folder, session):
             elif os.path.isdir(phys_path):
                 os.rmdir(phys_path)
         except Exception as e:
-            print(f"⚠️ Errore durante l'eliminazione: {e}")
+            print(f"⚠️ Error during execution: {e}")
 
     resp.response_start()
     dev.write(ep_out.bEndpointAddress, resp.get_block())
@@ -456,10 +445,9 @@ _COMMAND_HANDLERS = {
 }
 
 
-# --- LOOP PRINCIPALE ---
 def listen_for_commands(dev, ep_out, ep_in, base_folder):
     session = SessionState()
-    print("👂 In ascolto di comandi dalla Switch...")
+    print("👂 Listening for Switch commands...")
 
     while True:
         try:
@@ -474,13 +462,13 @@ def listen_for_commands(dev, ep_out, ep_in, base_folder):
                         resp = CommandBlockBuilder()
                         handler(data, resp, dev, ep_out, base_folder, session)
                     else:
-                        print(f"⚠️ ATTENZIONE: Ricevuto comando non gestito: {cmd_id}")
+                        print(f"⚠️ WARNING: received unhandled command: {cmd_id}")
 
                 else:
-                    print(f"⚠️ Magic sconosciuto: {hex(magic)}")
+                    print(f"⚠️ Unknown magic: {hex(magic)}")
 
         except usb.core.USBError as e:
             if e.errno == 110:
                 continue
-            print(f"❌ Errore USB: {e}")
+            print(f"❌ USB error: {e}")
             break

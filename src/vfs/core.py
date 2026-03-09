@@ -11,35 +11,35 @@ _RAR_METADATA_CACHE = {}
 
 def is_primary_rar(filename):
     """
-    Determina se un file RAR è il volume principale da mostrare.
-    Nasconde le parti secondarie come .part02.rar, .part03.rar, .r00, .r01, ecc.
+    Determines whether a RAR file is the main volume to display.
+    Hides secondary parts such as .part02.rar, .part03.rar, .r00, .r01, etc.
     """
     lower_name = filename.lower()
 
-    # Se non è un rar, lo scartiamo
+    # If it is not a rar, discard it
     if not lower_name.endswith('.rar'):
-        # Gestiamo anche il vecchio formato .r00, .r01 che vanno nascosti
+        # Also handle the old .r00, .r01 format, which must be hidden
         if re.search(r'\.r\d{2}$', lower_name):
             return False
         return False
 
-    # Controllo per il formato .partXX.rar
+    # Check for the .partXX.rar format
     match = re.search(r'\.part(\d+)\.rar$', lower_name)
     if match:
         part_num = int(match.group(1))
-        # È il file primario solo se è la parte 1
+        # It is the primary file only if it is part 1
         return part_num == 1
 
-    return True  # Se è un semplice .rar, è il primario
+    return True  # If it is a simple .rar, it is the primary one
 
 
 def get_rar_metadata(rar_path):
-    # [Resto del codice invariato...]
+    # [Rest of the code unchanged...]
     if rar_path in _RAR_METADATA_CACHE:
         return _RAR_METADATA_CACHE[rar_path]
 
     try:
-        # rarfile, se configurato bene, gestirà il multi-volume dal primo file
+        # rarfile, if configured properly, will handle multi-volume archives from the first file
         with rarfile.RarFile(rar_path) as rf:
             info_list = rf.infolist()
             files = [f.filename for f in info_list if not f.isdir()]
@@ -48,12 +48,12 @@ def get_rar_metadata(rar_path):
             _RAR_METADATA_CACHE[rar_path] = {'files': files, 'sizes': sizes}
             return _RAR_METADATA_CACHE[rar_path]
     except Exception as e:
-        print(f"⚠️ Errore durante l'analisi dell'archivio {rar_path}: {e}")
+        print(f"⚠️ Error while analyzing archive {rar_path}: {e}")
         return {'files': [], 'sizes': {}}
 
 
 def parse_virtual_path(path):
-    # [Resto del codice invariato...]
+    # [Rest of the code unchanged...]
     if os.path.exists(path):
         if os.path.isdir(path):
             return ('PHYSICAL_DIR', path, None)
@@ -80,7 +80,7 @@ def vfs_get_dirs(path):
         try:
             items = os.listdir(phys_path)
             dirs = [d for d in items if os.path.isdir(os.path.join(phys_path, d))]
-            # FILTRO APPLICATO QUI: Solo i file .rar "master" diventano cartelle
+            # FILTER APPLIED HERE: Only "master" .rar files become directories
             rars = [f for f in items if os.path.isfile(os.path.join(phys_path, f)) and is_primary_rar(f)]
             return sorted(dirs + rars)
         except Exception:
@@ -90,7 +90,7 @@ def vfs_get_dirs(path):
 
 
 def vfs_get_files(path):
-    """Restituisce file fisici (esclusi i .rar) o i file contenuti in un RAR."""
+    """Returns physical files (excluding .rar files) or the files contained inside a RAR."""
     path_type, phys_path, _ = parse_virtual_path(path)
 
     if path_type == 'PHYSICAL_DIR':
@@ -99,7 +99,7 @@ def vfs_get_files(path):
             files = []
             for f in items:
                 if os.path.isfile(os.path.join(phys_path, f)) and not f.lower().endswith('.rar'):
-                    # INIEZIONE XCI: Camuffiamo il file per accontentare Goldleaf
+                    # XCI INJECTION: We disguise the file to satisfy Goldleaf
                     if f.lower().endswith('.xci'):
                         files.append(f + '.nsp')
                     else:
@@ -109,11 +109,11 @@ def vfs_get_files(path):
             return []
 
     elif path_type == 'RAR_AS_DIR':
-        # Goldleaf è "entrato" nel RAR, mostriamo il contenuto virtuale
+        # Goldleaf has "entered" the RAR, so we show the virtual contents
         metadata = get_rar_metadata(phys_path)
         files = []
         for f in metadata['files']:
-            # INIEZIONE XCI: Camuffiamo il file anche dentro i RAR
+            # XCI INJECTION: We also disguise the file inside RAR archives
             if f.lower().endswith('.xci'):
                 files.append(f + '.nsp')
             else:
@@ -124,7 +124,7 @@ def vfs_get_files(path):
 
 
 def vfs_stat(path):
-    """Restituisce il tipo di percorso e la sua dimensione reale (decompressa)."""
+    """Returns the path type and its real (decompressed) size."""
     path_type, phys_path, internal_path = parse_virtual_path(path)
 
     if path_type in ('PHYSICAL_DIR', 'RAR_AS_DIR'):
@@ -144,11 +144,11 @@ def vfs_stat(path):
 def is_rar_multipart(rar_path):
     lower = rar_path.lower()
 
-    # Caso .part1.rar
+    # Case .part1.rar
     if re.search(r'\.part0*1\.rar$', lower):
         return True
 
-    # Controllo old-style .rar + .r00/.r01 accanto
+    # Check old-style .rar + .r00/.r01 next to it
     folder = os.path.dirname(rar_path)
     base = os.path.splitext(os.path.basename(rar_path))[0].lower()
 
