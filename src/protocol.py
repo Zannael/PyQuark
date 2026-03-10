@@ -449,38 +449,34 @@ _COMMAND_HANDLERS = {
 
 def listen_for_commands(dev, ep_out, ep_in, base_folder):
     session = SessionState()
-    print("👂 In ascolto... (Supporto Goldleaf & DBI attivo)")
+    print("👂 Listeining... (Goldleaf & DBI support)")
 
-    # Prepariamo la mappa dei file per DBI
-    print("🔍 Mappatura virtuale dei file per DBI in corso...")
+    print("🔍 Virtual file mapping for DBI...")
     dbi_file_map = dbi_protocol.build_dbi_file_map(base_folder)
-    print(f"✅ Trovati {len(dbi_file_map)} titoli installabili (inclusi quelli nei RAR).")
+    print(f"✅ Found {len(dbi_file_map)} available titles (RAR onees included).")
 
     while True:
         try:
-            # Leggiamo i dati (pyusb restituisce un array('B'))
             raw_data = dev.read(ep_in.bEndpointAddress, BLOCK_SIZE, timeout=1000)
 
             if len(raw_data) >= 8:
-                # CONVERSIONE FONDAMENTALE: trasformiamo l'array in bytes
                 data = bytes(raw_data)
 
                 magic_bytes = data[:4]
 
                 # --------------------------------------------------
-                # 🟢 ROTTA DBI (Il client è DBI)
+                # 🟢 DBI ROUTE
                 # --------------------------------------------------
                 if magic_bytes == b'DBI0':
                     cmd_type, cmd_id, data_size = struct.unpack_from('<III', data, 4)
 
                     if cmd_id == dbi_protocol.CMD_ID_EXIT:
-                        print("🚪 [DBI] Connessione chiusa dalla console.")
+                        print("🚪 [DBI] Console-closed connection.")
                         dev.write(ep_out.bEndpointAddress,
                                   struct.pack('<4sIII', b'DBI0', dbi_protocol.CMD_TYPE_RESPONSE,
                                               dbi_protocol.CMD_ID_EXIT, 0))
 
                     elif cmd_id == dbi_protocol.CMD_ID_LIST:
-                        # Ricostruiamo la mappa per avere file freschi
                         dbi_file_map = dbi_protocol.build_dbi_file_map(base_folder)
                         dbi_protocol.process_list_command(dev, ep_in, ep_out, dbi_file_map)
 
@@ -488,10 +484,10 @@ def listen_for_commands(dev, ep_out, ep_in, base_folder):
                         dbi_protocol.process_file_range_command(dev, ep_in, ep_out, data_size, dbi_file_map)
 
                     else:
-                        print(f"⚠️ [DBI] Comando non riconosciuto: {cmd_id}")
+                        print(f"⚠️ [DBI] Unknown command: {cmd_id}")
 
                 # --------------------------------------------------
-                # 🟡 ROTTA GOLDLEAF (Il client è Goldleaf)
+                # 🟡 GOLDLEAF ROUTE
                 # --------------------------------------------------
                 else:
                     magic, cmd_id = struct.unpack_from('<II', data, 0)
@@ -499,15 +495,14 @@ def listen_for_commands(dev, ep_out, ep_in, base_folder):
                         handler = _COMMAND_HANDLERS.get(cmd_id)
                         if handler:
                             resp = CommandBlockBuilder()
-                            # Passiamo raw_data o data, l'unpack_from funziona con entrambi
                             handler(data, resp, dev, ep_out, base_folder, session)
                         else:
-                            print(f"⚠️ [Goldleaf] Comando non gestito: {cmd_id}")
+                            print(f"⚠️ [Goldleaf] Unhandled command: {cmd_id}")
                     else:
-                        print(f"⚠️ Formato USB sconosciuto: {magic_bytes}")
+                        print(f"⚠️ Unknown USB format: {magic_bytes}")
 
         except usb.core.USBError as e:
-            if e.errno == 110:  # Timeout standard, continua ad ascoltare
+            if e.errno == 110:
                 continue
             print(f"❌ Errore USB: {e}")
             break
