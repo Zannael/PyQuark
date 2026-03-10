@@ -1,28 +1,48 @@
 # PyQuark
 
-**PyQuark** is a remote file server for the Nintendo Switch, designed to communicate with the **Goldleaf** homebrew application using the **Quark USB protocol**.
+**PyQuark** is a remote file server for the Nintendo Switch, designed to communicate with both **Goldleaf** (via the **Quark USB protocol**) and **DBI** (via the **DBI0 protocol**).
 
-Unlike standard servers, PyQuark features a **Virtual File System (VFS)** that allows you to install games directly from compressed archives and cartridge dumps (XCI). This completely bypasses the need to manually extract or convert files on your computer before installation.
+Unlike standard servers, PyQuark features a **Virtual File System (VFS)** that allows you to install games directly from compressed archives and cartridge dumps (`.xci`). This completely bypasses the need to manually extract or convert files on your computer before installation.
 
 ---
 
 ## Key Features
 
-### **XCI-to-NSP Injection**
+### **Dual Protocol Support**
 
-Virtually transforms `.xci` files into installable `.nsp` files on the fly. The system builds a fake **PFS0 header** in memory and maps the **NCA** data by reading directly from the physical offsets within the original XCI file.
+PyQuark automatically detects the connected client and adapts its behavior accordingly:
 
-This allows Goldleaf to install the game **without ever rewriting the file to disk**.
+* **Goldleaf Support**: uses the classic **Quark protocol** for NSP files and virtualized XCI installation.
+* **DBI Support**: implements the **DBI0 protocol** for high-speed, native installation of both XCI and NSP files, without metadata spoofing.
+
+This makes PyQuark a flexible USB installation server that can work seamlessly with two of the most widely used Nintendo Switch homebrew installers.
+
+### **XCI Virtualization & Native Streaming**
+
+PyQuark supports `.xci` files in two different ways depending on the client.
+
+#### **For Goldleaf**
+
+`.xci` files are **virtually transformed into installable `.nsp` files on the fly**.
+The system builds a fake **PFS0 header** in memory and maps the **NCA** data by reading directly from the physical offsets within the original XCI file.
+
+This allows Goldleaf to install the base game **without ever rewriting or converting the file to disk**.
+
+#### **For DBI**
+
+`.xci` files are streamed **natively**, so the console recognizes them as proper **GameCard installs**.
+
+This avoids the metadata rewriting tricks required for Goldleaf and provides a more robust installation path for cartridge dumps.
 
 ### **Native RAR Support**
 
-Treats `.rar` archives — including multi-volume formats such as `.part1.rar` — as if they were standard, navigable folders.
+PyQuark treats `.rar` archives — including **multi-volume archives** such as `.part1.rar`, `.part2.rar`, etc. — as if they were standard, navigable folders.
 
-From the console's perspective, these archives appear as normal directories that can be browsed directly.
+From the console's perspective, these archives appear as normal directories that can be browsed directly, allowing the user to install files stored inside them **without manual extraction**.
 
 ### **Hybrid Streaming and Staging**
 
-PyQuark uses two different strategies depending on file type and access needs:
+PyQuark uses two different strategies depending on file type and access needs.
 
 #### **Streaming**
 
@@ -30,118 +50,156 @@ Lightweight files are read and extracted in chunks, then sent directly over the 
 
 #### **Staging**
 
-Large files and XCI files — which require random access — are extracted in the background to a temporary cache.
+Large files — or files that require random access, such as `.xci` images — are extracted in the background to a temporary cache.
 
-This includes:
+This system includes:
 
 * dynamic wait times for read operations
 * smart cache management
 * automatic cleanup of multi-gigabyte temporary files when the session closes
 
+This hybrid approach makes it possible to balance memory usage, responsiveness, and compatibility.
+
 ### **Stateful Session Management**
 
-Keeps track of active paths and the virtualization engine's cache, ensuring stability even when the console requests highly fragmented data reads.
+PyQuark keeps track of active paths, archive handles, and virtualization cache state during a session.
 
----
+This improves stability when the console performs fragmented reads or repeatedly requests data from complex virtualized sources.
 
 ## Technical Architecture
 
-The project is structured into distinct, modular layers to handle everything from hardware communication to virtual file manipulation.
+The project is structured into modular layers, each responsible for a specific part of the pipeline:
 
-### **Transport** (`transport.py`)
-
-Handles low-level USB communication with the Nintendo Switch via **PyUSB**.
-
-### **Protocol** (`protocol.py`)
-
-Acts as the core dispatcher that intercepts, interprets, and responds to **Quark / Goldleaf** commands.
-
-### **VFS** (`core.py`)
-
-The file system abstraction layer. It manages file extension masking and decides how paths are presented to the console.
-
-### **Virtualizer** (`xci_virtualizer.py`)
-
-Responsible for:
-
-* **HFS0 parsing**
-* locating secure partition offsets
-* generating virtual **NSP headers** directly in RAM
-
-### **Storage** (`rar_stream.py`)
-
-Manages:
-
-* background threading for asynchronous archive extraction
-* temporary cache lifecycle
-
----
+| Component            | Responsibility                                                                                |
+| -------------------- | --------------------------------------------------------------------------------------------- |
+| `transport.py`       | Low-level USB communication via **PyUSB**                                                     |
+| `protocol.py`        | Dispatcher that identifies the connected client (**Goldleaf** vs **DBI**) and routes commands |
+| `dbi_protocol.py`    | Handles **DBI-specific** handshakes and 1 MB chunk streaming                                  |
+| `core.py`            | Virtual File System layer, path abstraction, and file extension masking                       |
+| `xci_virtualizer.py` | Parses **HFS0** and generates on-the-fly virtual **NSP headers** for Goldleaf                 |
+| `rar_stream.py`      | Manages background threads for asynchronous RAR extraction, staging, and cache cleanup        |
 
 ## Requirements
 
 To run **PyQuark**, make sure you have the following:
 
-* **Python 3.10** or newer
-* The Python libraries listed in the project requirements:
+* **Python 3.10+**
+* The required Python libraries:
 
   * `pyusb`
   * `rarfile`
   * `multivolumefile`
-* The **unrar** system utility installed and accessible from your operating system's `PATH`
-* A **Nintendo Switch** with **Goldleaf** installed
+* The **unrar** system utility installed and accessible from your system `PATH`
+* A **Nintendo Switch** with **Goldleaf** or **DBI** installed
 * A **good USB-C cable**
 
-> **Important:** `unrar` is strictly required for the background staging engine to function correctly.
+### **Windows only**
 
----
+* **Zadig** (or an equivalent tool) may be required to install compatible **WinUSB/libusb** drivers for the Nintendo Switch
+
+> **Important:** `unrar` is required for the archive extraction and staging engine to function correctly.
 
 ## Installation
 
-Clone the official repository and install the required dependencies:
+Clone the repository and install the required dependencies:
 
-```bash
+```
 git clone https://github.com/Zannael/PyQuark.git
 cd PyQuark
 pip install -r requirements.txt
 ```
 
----
+Make sure the `unrar` executable is installed and available in your `PATH`.
 
 ## Usage
-Run Goldleaf on your Nintendo Switch and connect it via USB to your computer.
-To start the server, configure the folder you want to share inside `main.py`, then run it from your IDE or with ```python main.py``` in your terminal.
 
----
+1. Configure the folder you want to share inside `main.py`
+2. Connect your Nintendo Switch via USB
+3. Launch **Goldleaf** or **DBI** on the console
+4. Start the server:
 
-## Compatibility and Technical Notes
+   python main.py
+
+### **Using DBI**
+
+In **DBI**, select:
+
+```
+Install title from USB
+```
+
+Your `.rar`, `.nsp`, and `.xci` files should appear directly in the file browser.
+
+### **Using Goldleaf**
+
+In **Goldleaf**, browse the shared USB content as usual.
+Virtualized `.xci` files will be exposed as installable content through the Quark-compatible layer.
+
+## Compatibility & Critical Notes
+
+PyQuark was originally developed around the Goldleaf workflow, but now also supports DBI for a more native and robust installation path.
+
+### **⚠️ Important: XCI Installation Warning**
+
+While PyQuark supports both clients, the behavior differs significantly depending on the installer used:
+
+* **Goldleaf**: installing an XCI as a **virtualized NSP** works for the **base game**
+* however, installing **subsequent NSP updates** may cause the game to fail to launch due to **metadata/signature conflicts** (for example, Digital Ticketless mismatch)
+
+### **Recommendation**
+
+For `.xci` installations, **DBI is strongly recommended**.
+
+DBI handles XCI files **natively**, which helps prevent later issues such as:
+
+* update incompatibility
+* launch failures
+* “corrupted data” errors after installing NSP updates
+
+If you only need to install the base content and accept the limitations, Goldleaf virtualization remains available.
+If you want the safest and most future-proof workflow, use **DBI**.
+
+## Performance Notes
+
+Installation speed depends on:
+
+* your computer hardware
+* USB transfer speed
+* archive size
+* whether the file can be streamed directly or must be staged first
+
+On older or low-power systems, on-the-fly extraction from archives may be slow. During these operations, the console interface may temporarily freeze while waiting for data.
+
+As long as the terminal does not show an error, the transfer may still be progressing normally.
+
+## Windows Notes
+
+Running the project natively on Windows may require a few extra adjustments.
+
+### **1. `unrar` system calls**
+
+The `subprocess` module expects the `unrar` command to be available.
+
+On Windows, you may need to specify the absolute path to `UnRAR.exe` if it is not exposed through your system `PATH`.
+
+### **2. USB drivers**
+
+The `pyusb` library typically requires compatible **libusb** or **WinUSB** drivers in order to communicate with the Nintendo Switch.
+
+This is commonly configured using **Zadig**.
+
+### **3. Kernel driver detachment**
+
+The `dev.detach_kernel_driver()` call used in the transport layer is generally **Linux-specific**.
+
+On Windows, this may raise an exception and should be bypassed or conditionally handled.
+
+## Tested Environment
 
 This project was developed and tested in the following environment:
 
-* **Operating System:** Pop!_OS 22.04 (Linux-based)
+* **Operating System:** Pop!_OS 22.04
 * **Python:** 3.10+
 * **Goldleaf:** 1.20
 
-I will run other tests to maximize system compatibility.
-Like any other software, the speed of operations depends on the hardware of the device being used (as well as the USB transfer speed) and the size of the file you are installing. For this reason, on older or low-power devices, operations related to the on-the-fly extraction of data from archives may be very slow. While waiting for data to be sent, the Goldleaf interface freezes, leaving no possibility for interaction. As long as you don't see an error in the terminal, everything is normal; it will unlock sooner or later (I hope! 🤣).
-
-### **Note for Windows Users**
-
-Running the project natively on Windows may present some issues and could require minor manual tweaks.
-
-#### **1. System calls to `unrar`**
-
-The `subprocess` module looks for the `unrar` command.
-
-On Windows, you may need to specify the absolute path to `UnRAR.exe` if it is not available in your system `PATH`.
-
-#### **2. USB drivers**
-
-The `pyusb` library on Windows generally requires compatible **libusb** or **WinUSB** drivers in order to communicate with the Nintendo Switch.
-
-This is often configured using tools such as **Zadig**.
-
-#### **3. Kernel drivers**
-
-The `dev.detach_kernel_driver()` method used in the transport layer is **Linux-specific**.
-
-On Windows, this line may throw an error and should be bypassed or conditionally handled.
+Additional testing may be needed to validate behavior across different operating systems, USB driver setups, and client versions.
