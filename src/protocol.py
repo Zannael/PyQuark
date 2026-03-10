@@ -1,6 +1,8 @@
 import usb.core
 import struct
 import os
+import src.dbi_protocol as dbi_protocol
+
 from src.vfs.core import vfs_get_dirs, vfs_get_files, vfs_stat, parse_virtual_path
 from src.vfs.rar_stream import (
     vfs_start_file, vfs_read_file, vfs_end_file,
@@ -447,28 +449,65 @@ _COMMAND_HANDLERS = {
 
 def listen_for_commands(dev, ep_out, ep_in, base_folder):
     session = SessionState()
-    print("👂 Listening for Switch commands...")
+    print("👂 In ascolto... (Supporto Goldleaf & DBI attivo)")
+
+    # Prepariamo la mappa dei file per DBI
+    print("🔍 Mappatura virtuale dei file per DBI in corso...")
+    dbi_file_map = dbi_protocol.build_dbi_file_map(base_folder)
+    print(f"✅ Trovati {len(dbi_file_map)} titoli installabili (inclusi quelli nei RAR).")
 
     while True:
         try:
-            data = dev.read(ep_in.bEndpointAddress, BLOCK_SIZE, timeout=1000)
+            # Leggiamo i dati (pyusb restituisce un array('B'))
+            raw_data = dev.read(ep_in.bEndpointAddress, BLOCK_SIZE, timeout=1000)
 
-            if len(data) >= 8:
-                magic, cmd_id = struct.unpack_from('<II', data, 0)
+            if len(raw_data) >= 8:
+                # CONVERSIONE FONDAMENTALE: trasformiamo l'array in bytes
+                data = bytes(raw_data)
 
-                if magic == INPUT_MAGIC:
-                    handler = _COMMAND_HANDLERS.get(cmd_id)
-                    if handler:
-                        resp = CommandBlockBuilder()
-                        handler(data, resp, dev, ep_out, base_folder, session)
+                magic_bytes = data[:4]
+
+                # --------------------------------------------------
+                # 🟢 ROTTA DBI (Il client è DBI)
+                # --------------------------------------------------
+                if magic_bytes == b'DBI0':
+                    cmd_type, cmd_id, data_size = struct.unpack_from('<III', data, 4)
+
+                    if cmd_id == dbi_protocol.CMD_ID_EXIT:
+                        print("🚪 [DBI] Connessione chiusa dalla console.")
+                        dev.write(ep_out.bEndpointAddress,
+                                  struct.pack('<4sIII', b'DBI0', dbi_protocol.CMD_TYPE_RESPONSE,
+                                              dbi_protocol.CMD_ID_EXIT, 0))
+
+                    elif cmd_id == dbi_protocol.CMD_ID_LIST:
+                        # Ricostruiamo la mappa per avere file freschi
+                        dbi_file_map = dbi_protocol.build_dbi_file_map(base_folder)
+                        dbi_protocol.process_list_command(dev, ep_in, ep_out, dbi_file_map)
+
+                    elif cmd_id == dbi_protocol.CMD_ID_FILE_RANGE:
+                        dbi_protocol.process_file_range_command(dev, ep_in, ep_out, data_size, dbi_file_map)
+
                     else:
-                        print(f"⚠️ WARNING: received unhandled command: {cmd_id}")
+                        print(f"⚠️ [DBI] Comando non riconosciuto: {cmd_id}")
 
+                # --------------------------------------------------
+                # 🟡 ROTTA GOLDLEAF (Il client è Goldleaf)
+                # --------------------------------------------------
                 else:
-                    print(f"⚠️ Unknown magic: {hex(magic)}")
+                    magic, cmd_id = struct.unpack_from('<II', data, 0)
+                    if magic == INPUT_MAGIC:
+                        handler = _COMMAND_HANDLERS.get(cmd_id)
+                        if handler:
+                            resp = CommandBlockBuilder()
+                            # Passiamo raw_data o data, l'unpack_from funziona con entrambi
+                            handler(data, resp, dev, ep_out, base_folder, session)
+                        else:
+                            print(f"⚠️ [Goldleaf] Comando non gestito: {cmd_id}")
+                    else:
+                        print(f"⚠️ Formato USB sconosciuto: {magic_bytes}")
 
         except usb.core.USBError as e:
-            if e.errno == 110:
+            if e.errno == 110:  # Timeout standard, continua ad ascoltare
                 continue
-            print(f"❌ USB error: {e}")
+            print(f"❌ Errore USB: {e}")
             break
