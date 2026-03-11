@@ -1,6 +1,6 @@
 # PyQuark
 
-**PyQuark** is a remote file server for the Nintendo Switch, designed to communicate with both **Goldleaf** (via the **Quark USB protocol**) and **DBI** (via the **DBI0 protocol**).
+**PyQuark** is a remote file server for the Nintendo Switch, designed to communicate with both **[Goldleaf](https://github.com/XorTroll/Goldleaf)** (via the **Quark USB protocol**) and **[DBI](https://github.com/rashevskyv/dbi)** (via the **DBI0 protocol**).
 
 Unlike standard servers, PyQuark features a **Virtual File System (VFS)** that allows you to install games directly from compressed archives and cartridge dumps (`.xci`). This completely bypasses the need to manually extract or convert files on your computer before installation.
 
@@ -125,19 +125,19 @@ Make sure the `unrar` executable is installed and available in your `PATH`.
 In **DBI**, select:
 
 ```
-Install title from USB
+Install via DBI backend
 ```
 
-Your `.rar`, `.nsp`, and `.xci` files should appear directly in the file browser.
+And only then start the program! Your `.rar`, `.nsp`, and `.xci` files should appear directly in the file browser.
 
 ### **Using Goldleaf**
 
-In **Goldleaf**, browse the shared USB content as usual.
+In **Goldleaf**, browse the shared USB content as usual. As long as you opened the homebrew app, you are free to launch `main.py` whenever you like.
 Virtualized `.xci` files will be exposed as installable content through the Quark-compatible layer.
 
 ## Compatibility & Critical Notes
 
-PyQuark was originally developed around the Goldleaf workflow, but now also supports DBI for a more native and robust installation path.
+PyQuark was originally developed around the Goldleaf workflow, but now also supports DBI for a more native and robust installation for XCI files.
 
 ### **⚠️ Important: XCI Installation Warning**
 
@@ -201,5 +201,6 @@ This project was developed and tested in the following environment:
 * **Operating System:** Pop!_OS 22.04
 * **Python:** 3.10+
 * **Goldleaf:** 1.20
+* **DBI:** 864-ru
 
 Additional testing may be needed to validate behavior across different operating systems, USB driver setups, and client versions.
