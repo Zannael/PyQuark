@@ -2,3 +2,9 @@
 /.*
 test_folder
 docs
+tools
+__pycache__/
+*.pyc
+build/
+dist/
+.venv-appimage/

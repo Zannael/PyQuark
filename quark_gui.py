@@ -2,6 +2,7 @@ import sys
 import os
 import re
 import threading
+import shutil
 from enum import Enum, auto
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -300,7 +301,16 @@ class PyQuarkApp(QMainWindow):
 
         self.init_ui()
         self.setup_logging()
+        self.warn_missing_unrar()
         self.update_state(AppState.APP_IDLE)
+
+    def warn_missing_unrar(self):
+        unrar_cmd = os.environ.get("PYQUARK_UNRAR_CMD", "unrar")
+        if shutil.which(unrar_cmd) is None:
+            self.append_log(
+                f"'{unrar_cmd}' not found in PATH. RAR staging mode won't be available.",
+                LogLevel.WARNING,
+            )
 
     def init_ui(self):
         self.setWindowTitle("PyQuark MITM Server")

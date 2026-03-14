@@ -111,6 +111,39 @@ pip install -r requirements.txt
 
 Make sure the `unrar` executable is installed and available in your `PATH`.
 
+## AppImage (Linux GUI)
+
+PyQuark can be packaged as a GUI-only AppImage (`quark_gui.py`) using the local virtual environment.
+
+### Requirements
+
+* Linux `x86_64`
+* `unrar` installed on the target system (not bundled in AppImage)
+* Build dependencies: `curl` or `wget`, `git`
+
+### Build (local machine)
+
+```bash
+scripts/build-appimage.sh
+```
+
+### Build (compatibility mode via Docker)
+
+To improve portability across distributions, build in a controlled Ubuntu container:
+
+```bash
+scripts/build-appimage-compat.sh
+```
+
+The generated file is written under `dist/` as `PyQuark-<version>-x86_64.AppImage`.
+
+### Run
+
+```bash
+chmod +x dist/PyQuark-*.AppImage
+./dist/PyQuark-*.AppImage
+```
+
 ## Usage
 
 1. Configure the folder you want to share inside `main.py`
@@ -193,6 +226,18 @@ This is commonly configured using **Zadig**.
 The `dev.detach_kernel_driver()` call used in the transport layer is generally **Linux-specific**.
 
 On Windows, this may raise an exception and should be bypassed or conditionally handled.
+
+## Linux USB Permissions (udev)
+
+If PyQuark cannot open the Nintendo Switch USB device without `sudo`, add a udev rule.
+
+Create `/etc/udev/rules.d/99-nintendo-switch.rules` with:
+
+```bash
+SUBSYSTEM=="usb", ATTR{idVendor}=="057e", ATTR{idProduct}=="3000", MODE="0666", GROUP="plugdev"
+```
+
+Then reload udev rules and reconnect the console.
 
 ## Tested Environment
 

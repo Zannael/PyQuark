@@ -15,6 +15,10 @@ STAGE_THRESHOLD = 3.5 * 1024 * 1024 * 1024  # 3.5 GiB circa
 CACHE_ROOT = os.path.join(tempfile.gettempdir(), "pyquark_stage_cache")
 
 
+def get_unrar_command():
+    return os.environ.get("PYQUARK_UNRAR_CMD", "unrar")
+
+
 class RarVirtualHandle:
     def __init__(self, rar_path, internal_path, mode="stream", cache_root=None,
                  force_delete_on_close=False):
@@ -81,8 +85,14 @@ class RarVirtualHandle:
                 except Exception:
                     pass
 
+            unrar_cmd = get_unrar_command()
+            if shutil.which(unrar_cmd) is None:
+                raise RuntimeError(
+                    f"Extractor '{unrar_cmd}' not found in PATH. Install unrar and retry."
+                )
+
             cmd = [
-                "unrar", "x", "-y", "-idq",
+                unrar_cmd, "x", "-y", "-idq",
                 self.rar_path,
                 self.internal_path,
                 self.temp_dir
@@ -100,7 +110,9 @@ class RarVirtualHandle:
                 return
 
             if rc != 0:
-                stderr = self._extract_proc.stderr.read().decode(errors="ignore")
+                stderr = ""
+                if self._extract_proc is not None and self._extract_proc.stderr is not None:
+                    stderr = self._extract_proc.stderr.read().decode(errors="ignore")
                 raise RuntimeError(f"unrar failed rc={rc}: {stderr}")
 
             if not os.path.exists(self.temp_filepath):
