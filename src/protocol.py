@@ -447,7 +447,7 @@ _COMMAND_HANDLERS = {
 }
 
 
-def listen_for_commands(dev, ep_out, ep_in, base_folder):
+def listen_for_commands(dev, ep_out, ep_in, base_folder, stop_event=None):
     session = SessionState()
     print("👂 Listeining... (Goldleaf & DBI support)")
 
@@ -456,6 +456,9 @@ def listen_for_commands(dev, ep_out, ep_in, base_folder):
     print(f"✅ Found {len(dbi_file_map)} available titles (RAR onees included).")
 
     while True:
+        if stop_event is not None and stop_event.is_set():
+            print("🛑 Stop requested by GUI. Closing server loop.")
+            break
         try:
             raw_data = dev.read(ep_in.bEndpointAddress, BLOCK_SIZE, timeout=1000)
 
@@ -475,6 +478,8 @@ def listen_for_commands(dev, ep_out, ep_in, base_folder):
                         dev.write(ep_out.bEndpointAddress,
                                   struct.pack('<4sIII', b'DBI0', dbi_protocol.CMD_TYPE_RESPONSE,
                                               dbi_protocol.CMD_ID_EXIT, 0))
+                        print("🛑 [DBI] Exit command acknowledged. Ending session loop.")
+                        break
 
                     elif cmd_id == dbi_protocol.CMD_ID_LIST:
                         dbi_file_map = dbi_protocol.build_dbi_file_map(base_folder)
@@ -503,6 +508,9 @@ def listen_for_commands(dev, ep_out, ep_in, base_folder):
 
         except usb.core.USBError as e:
             if e.errno == 110:
+                if stop_event is not None and stop_event.is_set():
+                    print("🛑 Stop requested by GUI after USB timeout.")
+                    break
                 continue
             print(f"❌ Errore USB: {e}")
             break

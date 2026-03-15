@@ -3,6 +3,7 @@ import os
 import re
 import threading
 import shutil
+import time
 from enum import Enum, auto
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -32,12 +33,12 @@ class AppState(Enum):
 STATE_MESSAGES = {
     AppState.APP_IDLE: ("Disconnected", "#888888"),
     AppState.APP_CONNECTING: ("Connecting to Nintendo Switch...", "#E2C08D"),
-    AppState.APP_CONNECTED: ("Connected! Awaiting folder selection.", "#89D185"),
-    AppState.APP_FOLDER_SELECTED: ("Folder selected. Preparing VFS...", "#569CD6"),
-    AppState.APP_SCANNING: ("Scanning VFS structure...", "#C586C0"),
-    AppState.APP_READY: ("Ready. Waiting for commands from console...", "#89D185"),
-    AppState.APP_SERVING: ("Serving files to console...", "#4EC9B0"),
-    AppState.APP_PROCESSING: ("Processing request...", "#DCDCAA"),
+    AppState.APP_CONNECTED: ("Connected. Select a root folder.", "#89D185"),
+    AppState.APP_FOLDER_SELECTED: ("Root folder selected.", "#569CD6"),
+    AppState.APP_SCANNING: ("Indexing game library...", "#C586C0"),
+    AppState.APP_READY: ("Ready for DBI/Goldleaf requests.", "#89D185"),
+    AppState.APP_SERVING: ("Transfer active.", "#4EC9B0"),
+    AppState.APP_PROCESSING: ("Transfer active.", "#4EC9B0"),
     AppState.APP_STOPPING: ("Stopping session...", "#F44747"),
     AppState.APP_ERROR: ("Error occurred", "#F44747"),
 }
@@ -45,12 +46,33 @@ STATE_MESSAGES = {
 
 LIFECYCLE_STEPS = [
     ("1", "Connect to Switch", False),
-    ("2", "Choose Root Folder", False),
-    ("3", "Start Serving", False),
-    ("4", "Waiting for Commands", False),
-    ("5", "Process Commands", False),
-    ("6", "Stop Session", False),
+    ("2", "Select Root Folder", False),
+    ("3", "Index Library", False),
+    ("4", "Ready for Console", False),
+    ("5", "Transferring", False),
+    ("6", "Session Ended", False),
 ]
+
+STATE_TO_STEP = {
+    AppState.APP_IDLE: 0,
+    AppState.APP_CONNECTING: 0,
+    AppState.APP_CONNECTED: 1,
+    AppState.APP_FOLDER_SELECTED: 2,
+    AppState.APP_SCANNING: 2,
+    AppState.APP_READY: 3,
+    AppState.APP_SERVING: 4,
+    AppState.APP_PROCESSING: 4,
+    AppState.APP_STOPPING: 5,
+    AppState.APP_ERROR: 5,
+}
+
+VISUAL_PREFIX_TOKENS = (
+    "⚠️", "❌", "🔄", "✅", "📥", "📖", "📁", "📄", "📋", "🚪",
+    "⚡", "🪄", "🗺️", "📦", "▶️", "⏹️", "🛑", "🔍",
+)
+
+DBI_READ_RE = re.compile(r"\[DBI\] Reading:\s+(.+?)\s+\(Offset:\s*(\d+),\s*Size:\s*(\d+)\)")
+GL_READ_RE = re.compile(r"CMD: ReadFile\((.+?)\s+\|\s+Offset:\s*(\d+),\s*Size:\s*(\d+)\)")
 
 
 class LogLevel(Enum):
@@ -96,15 +118,15 @@ class LogParser(QObject):
     log_entry = pyqtSignal(str, object)
 
     BACKEND_PATTERNS = {
-        re.compile(r"👂 Listeining.*"): (AppState.APP_READY, "Waiting for Goldleaf/DBI commands"),
-        re.compile(r"🔍 Virtual file mapping for DBI.*"): (AppState.APP_SCANNING, "Scanning VFS structure"),
-        re.compile(r"✅ Found \d+ available titles.*"): (AppState.APP_READY, "VFS scan complete"),
-        re.compile(r"📖 CMD: ReadFile|📥 CMD: GetFile|📥 CMD: GetDirectory|📥 CMD: GetDrive|🔍 CMD: StatPath"): (AppState.APP_PROCESSING, "Processing command"),
-        re.compile(r"📖 \[DBI\] Reading:"): (AppState.APP_PROCESSING, "DBI: Streaming file"),
-        re.compile(r"🔄 \[VFS\] Opening|🔄 \[VFS\].*started for"): (AppState.APP_PROCESSING, "Opening VFS file"),
-        re.compile(r"🪄 .*Virtual header generation|🗺️ \[VFS\+XCI\]"): (AppState.APP_PROCESSING, "Processing XCI virtual header"),
-        re.compile(r"📦 \[VFS\] Handle creato.*"): (AppState.APP_PROCESSING, "VFS handle created"),
-        re.compile(r"📋 \[DBI\] File list request"): (AppState.APP_PROCESSING, "DBI: File list request"),
+        re.compile(r"👂.*Goldleaf.*DBI.*", re.IGNORECASE): (AppState.APP_READY, "Ready. Waiting for console requests"),
+        re.compile(r"🔍\s+Virtual file mapping for DBI.*"): (AppState.APP_SCANNING, "Indexing game library"),
+        re.compile(r"✅\s+Found\s+\d+\s+available titles.*"): (AppState.APP_READY, "Library indexing complete"),
+        re.compile(r"📖\s+CMD:\s+ReadFile|📥\s+CMD:\s+GetFile|📥\s+CMD:\s+GetDirectory|📥\s+CMD:\s+GetDrive|🔍\s+CMD:\s+StatPath"): (AppState.APP_PROCESSING, "Serving request"),
+        re.compile(r"📖\s+\[DBI\]\s+Reading:"): (AppState.APP_PROCESSING, "DBI transfer active"),
+        re.compile(r"🔄\s+\[VFS\]\s+Opening|🔄\s+\[VFS\].*started for"): (AppState.APP_PROCESSING, "Preparing VFS stream"),
+        re.compile(r"🪄\s+.*Virtual header generation|🗺️\s+\[VFS\+XCI\]"): (AppState.APP_PROCESSING, "Preparing XCI virtual header"),
+        re.compile(r"📦\s+\[VFS\]\s+Handle.*"): (AppState.APP_PROCESSING, "VFS handle ready"),
+        re.compile(r"📋\s+\[DBI\]\s+File list request"): (AppState.APP_READY, "DBI requested file list"),
         re.compile(r"🚪 \[DBI\] Console-closed connection"): (AppState.APP_STOPPING, "Console closed connection"),
         re.compile(r"⚠️|Error|❌"): (None, None),
     }
@@ -199,7 +221,7 @@ class ServerWorker(QThread):
         sys.stderr = log_capture
 
         try:
-            listen_for_commands(self.dev, self.ep_out, self.ep_in, self.folder)
+            listen_for_commands(self.dev, self.ep_out, self.ep_in, self.folder, stop_event=self._stop_event)
         except Exception as e:
             self.log_message.emit(f"Server loop error: {e}")
         finally:
@@ -298,6 +320,13 @@ class PyQuarkApp(QMainWindow):
         self.server_worker = None
         self.current_state = AppState.APP_IDLE
         self.selected_folder = ""
+        self.session_started_at = None
+        self.transfer_started_at = None
+        self.total_bytes_sent = 0
+        self.request_count = 0
+        self.current_file = "-"
+        self.first_transfer_seen = False
+        self.session_summary_logged = False
 
         self.init_ui()
         self.setup_logging()
@@ -375,6 +404,31 @@ class PyQuarkApp(QMainWindow):
 
         main_layout.addWidget(self.status_container)
 
+        metrics_container = QWidget()
+        metrics_layout = QHBoxLayout(metrics_container)
+        metrics_layout.setContentsMargins(0, 0, 0, 0)
+        metrics_layout.setSpacing(12)
+
+        self.metric_elapsed = QLabel("Elapsed: 00:00")
+        self.metric_requests = QLabel("Requests: 0")
+        self.metric_bytes = QLabel("Data sent: 0 B")
+        self.metric_speed = QLabel("Speed: 0 B/s")
+        self.metric_file = QLabel("File: -")
+        self.metric_file.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        for metric in (
+            self.metric_elapsed,
+            self.metric_requests,
+            self.metric_bytes,
+            self.metric_speed,
+            self.metric_file,
+        ):
+            metric.setStyleSheet("color: #9CDCFE;")
+            metrics_layout.addWidget(metric)
+
+        metrics_layout.addStretch()
+        main_layout.addWidget(metrics_container)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setRange(0, 100)
@@ -404,10 +458,6 @@ class PyQuarkApp(QMainWindow):
         self.stdout_wrapper = OutputWrapper()
         self.stdout_wrapper.text_written.connect(self.handle_backend_output)
 
-        self.log_parser = LogParser()
-        self.log_parser.state_changed.connect(self.on_backend_state_change)
-        self.log_parser.log_entry.emit("PyQuark GUI initialized. Ready to connect.", LogLevel.SYSTEM)
-
         self.log_formats = {}
         for level, color in LOG_COLORS.items():
             fmt = QTextCharFormat()
@@ -417,6 +467,16 @@ class PyQuarkApp(QMainWindow):
         self.info_format = QTextCharFormat()
         self.info_format.setForeground(QColor("#D4D4D4"))
 
+        self.log_parser = LogParser()
+        self.log_parser.state_changed.connect(self.on_backend_state_change)
+        self.log_parser.log_entry.connect(self.append_log)
+
+        self.metrics_timer = QTimer(self)
+        self.metrics_timer.setInterval(1000)
+        self.metrics_timer.timeout.connect(self.refresh_metrics)
+
+        self.log_parser.log_entry.emit("PyQuark GUI initialized. Ready to connect.", LogLevel.SYSTEM)
+
     def handle_backend_output(self, text):
         if text and not text.isspace():
             self.log_parser.parse(text)
@@ -424,42 +484,49 @@ class PyQuarkApp(QMainWindow):
     def on_backend_state_change(self, state, message):
         try:
             app_state = AppState[state.name]
+            self._transition_state_from_backend(app_state)
             self.update_operation(message)
         except:
             pass
+
+    def _transition_state_from_backend(self, next_state):
+        if next_state in (AppState.APP_STOPPING, AppState.APP_ERROR):
+            self.update_state(next_state)
+            return
+
+        current_step = STATE_TO_STEP.get(self.current_state, 0)
+        next_step = STATE_TO_STEP.get(next_state, 0)
+        if next_step >= current_step:
+            self.update_state(next_state)
 
     def update_state(self, new_state):
         self.current_state = new_state
         message, color = STATE_MESSAGES.get(new_state, ("Unknown", "#888888"))
         self.status_label.setText(f"Status: {message}")
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self.lifecycle.set_step(STATE_TO_STEP.get(new_state, 0))
 
         if new_state == AppState.APP_CONNECTING:
             self.progress_bar.setRange(0, 0)
-            self.lifecycle.set_step(0)
         elif new_state == AppState.APP_CONNECTED:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100)
-            self.lifecycle.set_step(1)
             self.btn_connect.setText("🔌 Connected")
             self.btn_choose.setEnabled(True)
             self.btn_stop.show()
         elif new_state == AppState.APP_FOLDER_SELECTED:
             self.progress_bar.setRange(0, 0)
-            self.lifecycle.set_step(2)
         elif new_state == AppState.APP_SCANNING:
-            self.lifecycle.set_step(2)
+            self.progress_bar.setRange(0, 0)
         elif new_state == AppState.APP_READY:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100)
-            self.lifecycle.set_step(3)
         elif new_state == AppState.APP_SERVING:
-            self.lifecycle.set_step(4)
+            self.progress_bar.setRange(0, 0)
         elif new_state == AppState.APP_PROCESSING:
-            self.lifecycle.set_step(4)
+            self.progress_bar.setRange(0, 0)
         elif new_state == AppState.APP_STOPPING:
             self.progress_bar.setRange(0, 0)
-            self.lifecycle.set_step(5)
         elif new_state == AppState.APP_IDLE:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
@@ -467,7 +534,6 @@ class PyQuarkApp(QMainWindow):
 
     def update_operation(self, message):
         self.operation_label.setText(message)
-        QTimer.singleShot(5000, lambda: self.operation_label.setText(""))
 
     def append_log(self, text, level=LogLevel.INFO):
         if not text or text.isspace():
@@ -476,8 +542,9 @@ class PyQuarkApp(QMainWindow):
         cursor = self.log_console.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
 
-        prefix = LOG_PREFIXES.get(level, "")
-        full_text = f"{prefix}{text}"
+        clean_text = text.rstrip("\n")
+        prefix = "" if clean_text.startswith(VISUAL_PREFIX_TOKENS) else LOG_PREFIXES.get(level, "")
+        full_text = f"{prefix}{clean_text}"
 
         if level in self.log_formats:
             cursor.insertText(full_text + "\n", self.log_formats[level])
@@ -524,6 +591,9 @@ class PyQuarkApp(QMainWindow):
 
         if folder_path:
             self.selected_folder = folder_path
+            self._reset_session_metrics()
+            self.session_started_at = time.monotonic()
+            self.metrics_timer.start()
             self.btn_choose.setEnabled(False)
             self.btn_choose.setText(f"📁 {os.path.basename(folder_path)}")
 
@@ -541,9 +611,100 @@ class PyQuarkApp(QMainWindow):
 
     def handle_server_log(self, text):
         if text and not text.isspace():
+            self._ingest_runtime_event(text.strip())
             self.log_parser.parse(text)
 
+    def _ingest_runtime_event(self, text):
+        if "CMD:" in text or "[DBI] Reading:" in text:
+            self.request_count += 1
+
+        dbi_match = DBI_READ_RE.search(text)
+        if dbi_match:
+            self.current_file = os.path.basename(dbi_match.group(1).strip())
+            self.total_bytes_sent += int(dbi_match.group(3))
+            if not self.first_transfer_seen:
+                self.first_transfer_seen = True
+                self.transfer_started_at = time.monotonic()
+                self.update_state(AppState.APP_PROCESSING)
+                self.append_log("Transfer started. Streaming data to console.", LogLevel.SYSTEM)
+            return
+
+        gl_match = GL_READ_RE.search(text)
+        if gl_match:
+            self.current_file = gl_match.group(1).strip()
+            self.total_bytes_sent += int(gl_match.group(3))
+            if not self.first_transfer_seen:
+                self.first_transfer_seen = True
+                self.transfer_started_at = time.monotonic()
+                self.update_state(AppState.APP_PROCESSING)
+                self.append_log("Transfer started. Streaming data to console.", LogLevel.SYSTEM)
+
+    @staticmethod
+    def _format_bytes(value):
+        units = ["B", "KB", "MB", "GB", "TB"]
+        amount = float(value)
+        idx = 0
+        while amount >= 1024 and idx < len(units) - 1:
+            amount /= 1024.0
+            idx += 1
+        if idx == 0:
+            return f"{int(amount)} {units[idx]}"
+        return f"{amount:.2f} {units[idx]}"
+
+    @staticmethod
+    def _format_duration(seconds):
+        seconds = max(0, int(seconds))
+        minutes, sec = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+        return f"{minutes:02d}:{sec:02d}"
+
+    def refresh_metrics(self):
+        now = time.monotonic()
+        elapsed = 0 if self.session_started_at is None else (now - self.session_started_at)
+        transfer_elapsed = 0 if self.transfer_started_at is None else max(0.001, now - self.transfer_started_at)
+        speed = self.total_bytes_sent / transfer_elapsed if self.transfer_started_at else 0
+
+        self.metric_elapsed.setText(f"Elapsed: {self._format_duration(elapsed)}")
+        self.metric_requests.setText(f"Requests: {self.request_count}")
+        self.metric_bytes.setText(f"Data sent: {self._format_bytes(self.total_bytes_sent)}")
+        self.metric_speed.setText(f"Speed: {self._format_bytes(speed)}/s")
+        self.metric_file.setText(f"File: {self.current_file}")
+
+    def _reset_session_metrics(self):
+        self.session_started_at = None
+        self.transfer_started_at = None
+        self.total_bytes_sent = 0
+        self.request_count = 0
+        self.current_file = "-"
+        self.first_transfer_seen = False
+        self.session_summary_logged = False
+        self.refresh_metrics()
+
+    def _append_session_summary(self):
+        if self.session_summary_logged:
+            return
+        if self.session_started_at is None and self.request_count == 0:
+            return
+        now = time.monotonic()
+        elapsed = 0 if self.session_started_at is None else (now - self.session_started_at)
+        self.append_log(
+            (
+                "Session summary -> "
+                f"duration: {self._format_duration(elapsed)}, "
+                f"requests: {self.request_count}, "
+                f"data sent: {self._format_bytes(self.total_bytes_sent)}, "
+                f"last file: {self.current_file}"
+            ),
+            LogLevel.SYSTEM,
+        )
+        self.session_summary_logged = True
+
     def on_server_finished(self, code):
+        self.metrics_timer.stop()
+        self.refresh_metrics()
+        self._append_session_summary()
         self.append_log(f"Server stopped (exit code: {code})", LogLevel.WARNING)
         self.reset_ui()
 
@@ -554,8 +715,10 @@ class PyQuarkApp(QMainWindow):
 
         if self.server_worker and self.server_worker.isRunning():
             self.server_worker.stop()
-            self.server_worker.terminate()
-            self.server_worker.wait(2000)
+            if not self.server_worker.wait(2500):
+                self.append_log("Worker did not stop in time, forcing termination.", LogLevel.WARNING)
+                self.server_worker.terminate()
+                self.server_worker.wait(2000)
             self.server_worker = None
 
         self.append_log("Releasing USB resources...", LogLevel.PROGRESS)
@@ -572,6 +735,9 @@ class PyQuarkApp(QMainWindow):
                 self.ep_in = None
 
         self.append_log("Session terminated.", LogLevel.SYSTEM)
+        self.metrics_timer.stop()
+        self.refresh_metrics()
+        self._append_session_summary()
         self.reset_ui()
 
     def reset_ui(self):
@@ -589,6 +755,7 @@ class PyQuarkApp(QMainWindow):
         self.progress_bar.setValue(0)
 
         self.selected_folder = ""
+        self._reset_session_metrics()
 
     def closeEvent(self, event):
         if self.current_state not in (AppState.APP_IDLE, AppState.APP_ERROR):
