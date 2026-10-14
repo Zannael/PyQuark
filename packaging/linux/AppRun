@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "$0")")"
+export PATH="$HERE/usr/bin:$PATH"
+
+if [[ -z "${PYQUARK_UNRAR_CMD:-}" ]]; then
+  export PYQUARK_UNRAR_CMD="$HERE/usr/bin/unrar"
+fi
+
+exec "$HERE/usr/bin/pyquark-gui" "$@"

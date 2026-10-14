@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PyQuark
+Comment=Nintendo Switch USB file server
+Exec=pyquark-gui
+Icon=pyquark
+Terminal=false
+Categories=Utility;

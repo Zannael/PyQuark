@@ -89,7 +89,7 @@ To run **PyQuark**, make sure you have the following:
   * `pyusb`
   * `rarfile`
   * `multivolumefile`
-* The **unrar** system utility installed and accessible from your system `PATH`
+* The **unrar** utility accessible from your system `PATH` (included in the Linux AppImage)
 * A **Nintendo Switch** with **Goldleaf** or **DBI** installed
 * A **good USB-C cable**
 
@@ -113,29 +113,46 @@ Make sure the `unrar` executable is installed and available in your `PATH`.
 
 ## AppImage (Linux GUI)
 
-PyQuark can be packaged as a GUI-only AppImage (`quark_gui.py`) using the local virtual environment.
+The Linux AppImage includes the GUI, Python, Qt, libusb and UnRAR 7.3.1.
+UnRAR's redistribution license is included at `usr/share/licenses/UnRAR/license.txt`
+inside the AppImage, with a copy in `packaging/licenses/UnRAR.txt`.
 
 ### Requirements
 
-* Linux `x86_64`
-* `unrar` installed on the target system (not bundled in AppImage)
-* Build dependencies: `curl` or `wget`, `git`
+* Linux `x86_64` with glibc 2.35 or newer and a graphical desktop
+* USB permissions for the Nintendo Switch (device access rules still apply)
+* No separate Python, UnRAR or libfuse2 installation is required
 
 ### Build (local machine)
 
 ```bash
-scripts/build-appimage.sh
+scripts/build-appimage.sh --python /path/to/build-environment/bin/python
 ```
 
 ### Build (compatibility mode via Docker)
 
-To improve portability across distributions, build in a controlled Ubuntu container:
+The recommended release build uses Ubuntu 22.04 and pinned Python packages:
 
 ```bash
-scripts/build-appimage-compat.sh
+PYQUARK_VERSION=1.1.2 scripts/build-appimage-compat.sh
 ```
 
-The generated file is written under `dist/` as `PyQuark-<version>-x86_64.AppImage`.
+The generated files are `dist/PyQuark-<version>-x86_64.AppImage`, its `.zsync`
+update file, and `dist/SHA256SUMS`. Publish all three together in a stable
+GitHub release. Embedded update information points AppImageUpdate at the latest
+stable release in `Zannael/PyQuark`; it does not add automatic network checks
+or downloads to PyQuark itself.
+
+Local builds need the packages listed in `packaging/linux/Dockerfile`, including
+PyInstaller, Qt, libusb, a C++ compiler and `zsyncmake`. The build downloads the
+official appimagetool, static type-2 runtime and UnRAR source, verifies their
+SHA-256 checksums, and compiles UnRAR. If an upstream `continuous` asset changes,
+review the new version and update its checksum in `scripts/build-appimage.sh`.
+The static runtime removes the libfuse2 dependency; the application still uses
+the host's glibc and desktop graphics libraries.
+
+For environments without FUSE, use `APPIMAGE_EXTRACT_AND_RUN=1 ./PyQuark-<version>-x86_64.AppImage`.
+To use a different extractor, set `PYQUARK_UNRAR_CMD=/absolute/path/to/unrar`.
 
 ### Run
 
