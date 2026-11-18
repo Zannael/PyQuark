@@ -1,4 +1,4 @@
-<p align="center"><img src="packaging/linux/pyquark.svg" alt="PyQuark logo" width="160"></p>
+<p align="center"><img src="assets/brand/logo_white.png" alt="PyQuark logo" width="160"></p>
 
 # PyQuark
 
