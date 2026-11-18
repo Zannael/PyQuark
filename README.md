@@ -1,3 +1,5 @@
+<p align="center"><img src="packaging/linux/pyquark.svg" alt="PyQuark logo" width="160"></p>
+
 # PyQuark
 
 **PyQuark** is a remote file server for the Nintendo Switch, designed to communicate with both **[Goldleaf](https://github.com/XorTroll/Goldleaf)** (via the **Quark USB protocol**) and **[DBI](https://github.com/rashevskyv/dbi)** (via the **DBI0 protocol**).
